@@ -340,7 +340,13 @@
 		};
 	};
 
-	$: contextUsage = getContextUsage() ?? (contextCompactionEnabled ? serverContextUsage : null);
+	// getContextUsage 在函数内部读取 history，Svelte 不会追踪函数内部的依赖，所以这里显式给出重算时机：
+	// 出现新消息、或当前回复完成（usage 与 done 在同一事件到达）。流式输出中该值不变，不会逐 token 重算整段对话
+	$: contextUsageRevision = `${history?.currentId}:${history?.messages?.[history?.currentId]?.done}`;
+	$: {
+		contextUsageRevision;
+		contextUsage = getContextUsage() ?? (contextCompactionEnabled ? serverContextUsage : null);
+	}
 	$: embeddedHeaderTitle = embeddedTitle || $chatTitle || $i18n.t('Chat');
 
 	let selectedToolIds: string[] = [];
