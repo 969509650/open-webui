@@ -1310,6 +1310,7 @@ async def chat_completion(
 
         approval_resume = getattr(request.state, 'tool_approval_resume', None)
         metadata = {
+            'request_started_at': time.time(),
             'tool_approval_resume': approval_resume[2]
             if approval_resume and approval_resume[:2] == (chat_id, form_data.get('assistant_message_id'))
             else None,

@@ -38,7 +38,15 @@ from open_webui.models.groups import Groups
 from open_webui.models.models import Models
 from open_webui.models.users import UserModel
 from open_webui.utils.access_control import check_model_access, has_connection_access, has_permission
-from open_webui.utils.anthropic import ANTHROPIC_VERSION, get_anthropic_models, is_anthropic_url
+from open_webui.utils.anthropic import (
+    ANTHROPIC_VERSION,
+    anthropic_stream_to_openai_stream,
+    convert_anthropic_to_openai_response,
+    convert_openai_to_anthropic_request,
+    get_anthropic_models,
+    is_anthropic_native_provider,
+    is_anthropic_url,
+)
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.headers import get_headers_and_cookies, include_user_info_headers
 from open_webui.utils.json_codec import JSONCodec
@@ -1312,6 +1320,16 @@ def convert_to_responses_payload(payload: dict) -> dict:
     if 'max_completion_tokens' in responses_payload:
         responses_payload['max_output_tokens'] = responses_payload.pop('max_completion_tokens')
 
+    # Responses API 只认嵌套的 reasoning.effort，顶层 reasoning_effort 不会生效；
+    # 与自定义参数里已有的 reasoning 对象合并，推理努力以对话里的选择为准
+    reasoning_effort = responses_payload.pop('reasoning_effort', None)
+    if reasoning_effort:
+        reasoning = responses_payload.get('reasoning')
+        responses_payload['reasoning'] = {
+            **(reasoning if isinstance(reasoning, dict) else {}),
+            'effort': reasoning_effort,
+        }
+
     # Remove Chat Completions-only parameters not supported by the Responses API
     for unsupported_key in (
         'stream_options',
@@ -1507,6 +1525,7 @@ async def generate_chat_completion(
     headers, cookies = await get_headers_and_cookies(request, url, key, api_config, metadata, user=user)
 
     is_responses = api_config.get('api_type') == 'responses'
+    is_anthropic_native = is_anthropic_native_provider(api_config)
 
     # Explicit continuation keeps llama.cpp from echoing the prefill in streamed replies.
     if (
@@ -1552,6 +1571,16 @@ async def generate_chat_completion(
         if is_responses:
             payload = convert_to_responses_payload(payload)
             request_url = f'{url}/responses'
+        elif is_anthropic_native:
+            try:
+                payload = convert_openai_to_anthropic_request(payload)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            request_url = f'{url}/messages'
+            # 原生 Anthropic 协议用 x-api-key 认证；Authorization 保留给只认 Bearer 的中转站
+            headers['anthropic-version'] = ANTHROPIC_VERSION
+            if key and api_config.get('auth_type') in (None, 'bearer'):
+                headers['x-api-key'] = key
         else:
             request_url = f'{url}/chat/completions'
     requested_model = payload.get('model')
@@ -1631,8 +1660,11 @@ async def generate_chat_completion(
                     )
 
             streaming = True
+            response_stream = stream_wrapper(r)
+            if is_anthropic_native:
+                response_stream = anthropic_stream_to_openai_stream(response_stream)
             return StreamingResponse(
-                stream_wrapper(r),
+                response_stream,
                 status_code=r.status,
                 headers=_clean_proxy_headers(r.headers),
             )
@@ -1663,6 +1695,8 @@ async def generate_chat_completion(
             # Convert Responses API result to simple format
             if is_responses and isinstance(response, dict):
                 response = convert_responses_result(response)
+            elif is_anthropic_native and isinstance(response, dict):
+                response = convert_anthropic_to_openai_response(response)
 
             return response
     except Exception as e:

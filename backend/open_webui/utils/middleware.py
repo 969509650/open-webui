@@ -207,6 +207,11 @@ def normalize_messages_for_model(form_data: dict) -> dict:
     return form_data
 
 
+def get_response_duration(metadata: dict) -> dict:
+    started_at = metadata.get('request_started_at')
+    return {'duration': round(time.time() - started_at, 1)} if started_at else {}
+
+
 async def publish_chat_finished_event(
     request: Request, user: UserModel, metadata: dict, title: str, content: str, output: list | None = None
 ):
@@ -4386,6 +4391,7 @@ async def non_streaming_chat_response_handler(response, ctx):
                         response_output = previous + response_output
                         content = get_output_text(response_output)
 
+                    duration = get_response_duration(metadata)
                     await event_emitter(
                         {
                             'type': 'chat:completion',
@@ -4394,6 +4400,7 @@ async def non_streaming_chat_response_handler(response, ctx):
                                 'done': True,
                                 'output': response_output,
                                 'title': title,
+                                **duration,
                             },
                         }
                     )
@@ -4411,6 +4418,7 @@ async def non_streaming_chat_response_handler(response, ctx):
                                 'role': 'assistant',
                                 'output': response_output,
                                 **({'usage': usage} if usage else {}),
+                                **duration,
                             },
                         )
 
@@ -6589,11 +6597,13 @@ async def streaming_chat_response_handler(response, ctx):
 
                 current_output = full_output()
                 title = await Chats.get_chat_title_by_id(metadata['chat_id']) if save_to_chat else ''
+                duration = get_response_duration(metadata)
                 data = {
                     'done': True,
                     'output': current_output,
                     'title': title,
                     **({'usage': usage} if usage else {}),
+                    **duration,
                 }
 
                 if save_to_chat:
@@ -6606,6 +6616,7 @@ async def streaming_chat_response_handler(response, ctx):
                             'done': True,
                             'output': current_output,
                             **({'usage': usage} if usage else {}),
+                            **duration,
                         },
                     )
 

@@ -3265,7 +3265,8 @@
 	};
 
 	const chatCompletionEventHandler = async (data, message, chatId, shared = false) => {
-		const { id, done, choices, content, output, sources, selected_model_id, error, usage } = data;
+		const { id, done, choices, content, output, sources, selected_model_id, error, usage, duration } =
+			data;
 
 		if (error) {
 			if (shared) message.error = error;
@@ -3329,6 +3330,10 @@
 
 		if (usage) {
 			message.usage = usage;
+		}
+
+		if (duration !== undefined) {
+			message.duration = duration;
 		}
 
 		history.messages[message.id] = message;
@@ -5038,6 +5043,7 @@
 										{history}
 										{taskIds}
 										bind:selectedModels
+										bind:params
 										bind:files
 										bind:prompt
 										bind:autoScroll
@@ -5133,6 +5139,7 @@
 										{history}
 										{taskIds}
 										bind:selectedModels
+										bind:params
 										bind:files
 										bind:prompt
 										bind:autoScroll
@@ -5194,6 +5201,7 @@
 									bind:selectedModelIdx
 									{history}
 									bind:selectedModels
+									bind:params
 									bind:messageInput
 									bind:files
 									bind:prompt

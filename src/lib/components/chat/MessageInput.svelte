@@ -82,6 +82,9 @@
 	import VoiceRecording from './MessageInput/VoiceRecording.svelte';
 	import ModelSelector from './ModelSelector.svelte';
 	import ModelControls from './MessageInput/ModelControls.svelte';
+	import ReasoningEffortSelect from './MessageInput/ReasoningEffortSelect.svelte';
+	import ContextUsageIndicator from './MessageInput/ContextUsageIndicator.svelte';
+	import { DEFAULT_CONTEXT_WINDOW_TOKENS } from '$lib/constants';
 
 	import ToolServersModal from './ToolServersModal.svelte';
 	import SkillsModal from './SkillsModal.svelte';
@@ -153,6 +156,8 @@
 	export let chatId = '';
 	export let contextUsage = null;
 	export let contextCompactionEnabled = false;
+	// 对话级参数；仅对话页传入，频道等其它场景保持 null 时不显示推理努力选择
+	export let params: Record<string, any> | null = null;
 	export let embedded = false;
 	export let callActive = false;
 
@@ -563,6 +568,20 @@
 			: `${contextTokens} ${$i18n.t('tokens')}`
 		: $i18n.t('unknown');
 	$: contextBarPercent = contextHasThreshold ? Math.min(contextPercent, 100) : 0;
+
+	// 输入框圆环：按固定窗口大小显示已用/剩余，与上面按压缩阈值计算的 /status 百分比相互独立
+	$: contextWindowUsedTokens =
+		statusContextUsage?.estimated_tokens || statusContextUsage?.tokens || 0;
+	$: contextWindowUsedPercent = (contextWindowUsedTokens / DEFAULT_CONTEXT_WINDOW_TOKENS) * 100;
+	$: contextWindowLabel = $i18n.t(
+		'Context window: {{used}} / {{total}} used ({{percent}}%), {{remaining}}% remaining',
+		{
+			used: formatTokenCount(contextWindowUsedTokens),
+			total: formatTokenCount(DEFAULT_CONTEXT_WINDOW_TOKENS),
+			percent: trimNumber(contextWindowUsedPercent),
+			remaining: trimNumber(Math.max(0, 100 - contextWindowUsedPercent))
+		}
+	);
 
 	const getCommand = () => {
 		const chatInput = document.getElementById('chat-input');
@@ -2648,6 +2667,13 @@
 										/>
 									</div>
 									<ModelControls selectedModels={selectedModelIds} />
+									{#if params}
+										<ReasoningEffortSelect bind:params />
+										<ContextUsageIndicator
+											usedPercent={contextWindowUsedPercent}
+											label={contextWindowLabel}
+										/>
+									{/if}
 
 									{#if isActive && prompt === '' && files.length === 0}
 										<div class=" flex items-center">

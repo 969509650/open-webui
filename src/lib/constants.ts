@@ -113,6 +113,9 @@ export const SUPPORTED_FILE_EXTENSIONS = [
 	'msg'
 ];
 
+// 对话输入框里“上下文用量”圆环使用的窗口大小（token）；各模型窗口不同，目前统一按此值显示
+export const DEFAULT_CONTEXT_WINDOW_TOKENS = 272000;
+
 export const DEFAULT_CAPABILITIES = {
 	file_context: true,
 	vision: true,

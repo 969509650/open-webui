@@ -1,4 +1,6 @@
 import logging
+import re
+import time
 
 import aiohttp
 from open_webui.env import (
@@ -30,6 +32,27 @@ ANTHROPIC_CONVERTED_REQUEST_PARAMS = {
     'tool_choice',
     'reasoning_effort',
 }
+
+ANTHROPIC_PROVIDER = 'anthropic'
+
+# Anthropic Messages API 强制要求 max_tokens；请求里没有指定时使用该值。
+ANTHROPIC_DEFAULT_MAX_TOKENS = 8192
+
+# Chat Completions 请求里可以直接同名转发给 Anthropic 的采样参数；其余参数一律不转发，避免上游 400。
+ANTHROPIC_FORWARDED_SAMPLING_PARAMS = ('temperature', 'top_p', 'top_k')
+
+# Anthropic output_config.effort 接受的档位；OpenAI 的 none/minimal 在 Anthropic 没有对应含义
+ANTHROPIC_SUPPORTED_EFFORTS = ('low', 'medium', 'high', 'xhigh', 'max')
+
+ANTHROPIC_STOP_REASON_TO_FINISH_REASON = {
+    'end_turn': 'stop',
+    'stop_sequence': 'stop',
+    'max_tokens': 'length',
+    'tool_use': 'tool_calls',
+    'refusal': 'content_filter',
+}
+
+DATA_URL_PATTERN = re.compile(r'^data:(?P<media_type>[^;,]+);base64,(?P<data>.+)$', re.DOTALL)
 
 
 def is_anthropic_url(url: str) -> bool:
@@ -999,3 +1022,379 @@ async def openai_stream_to_anthropic_stream(openai_stream_generator, model: str 
 
     # Emit message_stop
     yield f'event: message_stop\ndata: {JSONCodec.dumps({"type": "message_stop"})}\n\n'.encode()
+
+
+# ── OpenAI Chat Completions -> Anthropic Messages（向 Anthropic 协议上游发请求）──────────────
+
+
+def is_anthropic_native_provider(api_config: dict | None) -> bool:
+    """连接是否声明使用 Anthropic Messages 协议（如只转发原生 Claude 接口的中转站）。"""
+    return str((api_config or {}).get('provider', '')).lower() == ANTHROPIC_PROVIDER
+
+
+def _openai_content_to_text(content) -> str:
+    """system / tool 消息只能携带文本：把字符串或 content parts 里的文本拼起来。"""
+    if isinstance(content, str):
+        return content
+    return ''.join(
+        part.get('text', '') for part in content or [] if isinstance(part, dict) and part.get('type') == 'text'
+    )
+
+
+def _image_url_to_anthropic_block(url: str) -> dict:
+    data_url = DATA_URL_PATTERN.match(url)
+    if data_url:
+        return {
+            'type': 'image',
+            'source': {
+                'type': 'base64',
+                'media_type': data_url.group('media_type'),
+                'data': data_url.group('data'),
+            },
+        }
+    if url.startswith(('http://', 'https://')):
+        return {'type': 'image', 'source': {'type': 'url', 'url': url}}
+    raise ValueError('Unsupported image URL for Anthropic: only data URLs and http(s) URLs are supported')
+
+
+def _openai_content_to_anthropic_blocks(content) -> list[dict]:
+    if isinstance(content, str):
+        # Anthropic 不接受空文本块
+        return [{'type': 'text', 'text': content}] if content else []
+
+    blocks = []
+    for part in content or []:
+        part_type = part.get('type') if isinstance(part, dict) else None
+        if part_type == 'text':
+            if part.get('text'):
+                blocks.append({'type': 'text', 'text': part['text']})
+        elif part_type == 'image_url':
+            image_url = part.get('image_url')
+            url = image_url.get('url', '') if isinstance(image_url, dict) else image_url or ''
+            blocks.append(_image_url_to_anthropic_block(url))
+        else:
+            raise ValueError(f'Unsupported content part type for Anthropic: {part_type}')
+    return blocks
+
+
+def _parse_tool_call_arguments(arguments) -> dict:
+    if not arguments:
+        return {}
+    try:
+        parsed = JSONCodec.loads(arguments) if isinstance(arguments, str) else arguments
+    except (JSONCodec.JSONDecodeError, TypeError) as e:
+        raise ValueError(f'Tool call arguments are not valid JSON: {e}') from e
+    if not isinstance(parsed, dict):
+        raise ValueError('Tool call arguments must be a JSON object')
+    return parsed
+
+
+def _append_anthropic_message(messages: list[dict], role: str, blocks: list[dict]) -> None:
+    """Anthropic 要求 user/assistant 交替：相邻同角色消息合并（并行工具结果必须放在同一条 user 消息里）。"""
+    if not blocks:
+        return
+    if messages and messages[-1]['role'] == role:
+        messages[-1]['content'].extend(blocks)
+    else:
+        messages.append({'role': role, 'content': blocks})
+
+
+def _convert_openai_tools(tools: list) -> list[dict]:
+    converted_tools = []
+    for tool in tools:
+        function = tool.get('function') if isinstance(tool, dict) else None
+        if not isinstance(function, dict):
+            raise ValueError('Unsupported tool for Anthropic: only function tools are supported')
+
+        converted_tool = {
+            'name': function.get('name', ''),
+            'input_schema': function.get('parameters') or {'type': 'object', 'properties': {}},
+        }
+        if function.get('description'):
+            converted_tool['description'] = function['description']
+        converted_tools.append(converted_tool)
+    return converted_tools
+
+
+def _convert_openai_tool_choice(tool_choice) -> dict | None:
+    if tool_choice == 'auto':
+        return {'type': 'auto'}
+    if tool_choice == 'required':
+        return {'type': 'any'}
+    if tool_choice == 'none':
+        return {'type': 'none'}
+    if isinstance(tool_choice, dict) and isinstance(tool_choice.get('function'), dict):
+        return {'type': 'tool', 'name': tool_choice['function'].get('name', '')}
+    return None
+
+
+def convert_openai_to_anthropic_request(payload: dict) -> dict:
+    """
+    Convert a Chat Completions payload to an Anthropic Messages payload.
+
+    Raises ValueError for content that has no Anthropic equivalent, so the caller can
+    reject the request instead of sending something the upstream would silently misread.
+    """
+    system_parts = []
+    messages = []
+
+    for message in payload.get('messages', []):
+        role = message.get('role')
+        content = message.get('content')
+
+        if role in ('system', 'developer'):
+            text = _openai_content_to_text(content)
+            if text:
+                system_parts.append(text)
+        elif role == 'assistant':
+            blocks = _openai_content_to_anthropic_blocks(content)
+            for tool_call in message.get('tool_calls') or []:
+                function = tool_call.get('function') or {}
+                blocks.append(
+                    {
+                        'type': 'tool_use',
+                        'id': tool_call.get('id', ''),
+                        'name': function.get('name', ''),
+                        'input': _parse_tool_call_arguments(function.get('arguments')),
+                    }
+                )
+            _append_anthropic_message(messages, 'assistant', blocks)
+        elif role == 'tool':
+            tool_result = {
+                'type': 'tool_result',
+                'tool_use_id': message.get('tool_call_id', ''),
+                'content': _openai_content_to_text(content),
+            }
+            _append_anthropic_message(messages, 'user', [tool_result])
+        else:
+            _append_anthropic_message(messages, 'user', _openai_content_to_anthropic_blocks(content))
+
+    max_tokens = payload.get('max_tokens') or payload.get('max_completion_tokens') or ANTHROPIC_DEFAULT_MAX_TOKENS
+    anthropic_payload = {
+        'model': payload.get('model', ''),
+        'messages': messages,
+        'max_tokens': max_tokens,
+        'stream': bool(payload.get('stream', False)),
+    }
+
+    if system_parts:
+        anthropic_payload['system'] = '\n\n'.join(system_parts)
+
+    for param in ANTHROPIC_FORWARDED_SAMPLING_PARAMS:
+        if payload.get(param) is not None:
+            anthropic_payload[param] = payload[param]
+
+    stop = payload.get('stop')
+    if stop:
+        anthropic_payload['stop_sequences'] = [stop] if isinstance(stop, str) else list(stop)
+
+    tools = payload.get('tools')
+    if tools:
+        anthropic_payload['tools'] = _convert_openai_tools(tools)
+        # Anthropic 在没有 tools 时不接受 tool_choice
+        tool_choice = _convert_openai_tool_choice(payload.get('tool_choice'))
+        if tool_choice:
+            anthropic_payload['tool_choice'] = tool_choice
+
+    reasoning_effort = payload.get('reasoning_effort')
+    if reasoning_effort:
+        if reasoning_effort not in ANTHROPIC_SUPPORTED_EFFORTS:
+            raise ValueError(
+                f'Unsupported reasoning effort for Anthropic: {reasoning_effort} '
+                f'(supported: {", ".join(ANTHROPIC_SUPPORTED_EFFORTS)})'
+            )
+        # 新版 Claude 不再接受 budget_tokens：推理努力直接对应 output_config.effort，
+        # 且需显式开启自适应思考，否则部分模型（如 Opus 4.7/4.8）默认不思考、effort 不起作用
+        anthropic_payload['thinking'] = {'type': 'adaptive'}
+        anthropic_payload['output_config'] = {'effort': reasoning_effort}
+
+    return anthropic_payload
+
+
+# ── Anthropic Messages -> OpenAI Chat Completions（把上游响应还原给下游）─────────────────────
+
+
+def _anthropic_prompt_tokens(usage: dict) -> int:
+    """OpenAI 的 prompt_tokens 包含缓存部分，Anthropic 的 input_tokens 不包含。"""
+    return (
+        usage.get('input_tokens', 0)
+        + usage.get('cache_creation_input_tokens', 0)
+        + usage.get('cache_read_input_tokens', 0)
+    )
+
+
+def _convert_anthropic_usage(usage: dict | None) -> dict:
+    usage = usage or {}
+    prompt_tokens = _anthropic_prompt_tokens(usage)
+    completion_tokens = usage.get('output_tokens', 0)
+    return {
+        'prompt_tokens': prompt_tokens,
+        'completion_tokens': completion_tokens,
+        'total_tokens': prompt_tokens + completion_tokens,
+    }
+
+
+def convert_anthropic_to_openai_response(response: dict) -> dict:
+    """Convert a non-streaming Anthropic Messages response to Chat Completions format."""
+    content = ''
+    tool_calls = []
+    for block in response.get('content', []):
+        block_type = block.get('type')
+        if block_type == 'text':
+            content += block.get('text', '')
+        elif block_type == 'tool_use':
+            tool_calls.append(
+                {
+                    'id': block.get('id', ''),
+                    'type': 'function',
+                    'function': {
+                        'name': block.get('name', ''),
+                        'arguments': JSONCodec.dumps(block.get('input', {})),
+                    },
+                }
+            )
+
+    return {
+        'id': response.get('id', ''),
+        'object': 'chat.completion',
+        'created': int(time.time()),
+        'model': response.get('model', ''),
+        'choices': [
+            {
+                'index': 0,
+                'message': {
+                    'role': 'assistant',
+                    'content': content,
+                    **({'tool_calls': tool_calls} if tool_calls else {}),
+                },
+                'finish_reason': ANTHROPIC_STOP_REASON_TO_FINISH_REASON.get(response.get('stop_reason'), 'stop'),
+            }
+        ],
+        'usage': _convert_anthropic_usage(response.get('usage')),
+    }
+
+
+def _format_openai_sse(chunk: dict) -> bytes:
+    return f'data: {JSONCodec.dumps(chunk)}\n\n'.encode()
+
+
+async def anthropic_stream_to_openai_stream(anthropic_stream):
+    """
+    Convert an Anthropic Messages SSE stream to Chat Completions SSE chunks.
+
+    ``anthropic_stream`` must be an async generator yielding the upstream SSE lines
+    (e.g. ``stream_wrapper(response)``); it is closed here so the upstream response is
+    released even when the downstream consumer stops early.
+
+    A stream that ends without ``message_stop`` is reported as an error chunk rather than
+    being passed off as a normal completion.
+    """
+    completion_id = ''
+    model = ''
+    created = int(time.time())
+    prompt_tokens = 0
+    completion_tokens = 0
+    finish_reason = 'stop'
+    # Anthropic 的 content block 序号 -> OpenAI tool_calls 数组下标（text 块不占 tool_calls 下标）
+    tool_call_indexes = {}
+    completed = False
+
+    def chunk_of(delta: dict, finish: str | None = None) -> bytes:
+        return _format_openai_sse(
+            {
+                'id': completion_id,
+                'object': 'chat.completion.chunk',
+                'created': created,
+                'model': model,
+                'choices': [{'index': 0, 'delta': delta, 'finish_reason': finish}],
+            }
+        )
+
+    try:
+        async for raw in anthropic_stream:
+            text = raw.decode('utf-8', errors='ignore') if isinstance(raw, bytes) else raw
+            for line in text.splitlines():
+                line = line.strip()
+                if not line.startswith('data:'):
+                    continue
+                try:
+                    event = JSONCodec.loads(line[5:].strip())
+                except (JSONCodec.JSONDecodeError, TypeError):
+                    continue
+
+                event_type = event.get('type')
+                if event_type == 'message_start':
+                    message = event.get('message') or {}
+                    completion_id = message.get('id', '')
+                    model = message.get('model', '')
+                    prompt_tokens = _anthropic_prompt_tokens(message.get('usage') or {})
+                    yield chunk_of({'role': 'assistant', 'content': ''})
+                elif event_type == 'content_block_start':
+                    block = event.get('content_block') or {}
+                    if block.get('type') == 'tool_use':
+                        tool_call_index = len(tool_call_indexes)
+                        tool_call_indexes[event.get('index')] = tool_call_index
+                        yield chunk_of(
+                            {
+                                'tool_calls': [
+                                    {
+                                        'index': tool_call_index,
+                                        'id': block.get('id', ''),
+                                        'type': 'function',
+                                        'function': {'name': block.get('name', ''), 'arguments': ''},
+                                    }
+                                ]
+                            }
+                        )
+                elif event_type == 'content_block_delta':
+                    delta = event.get('delta') or {}
+                    delta_type = delta.get('type')
+                    if delta_type == 'text_delta':
+                        yield chunk_of({'content': delta.get('text', '')})
+                    elif delta_type == 'input_json_delta' and event.get('index') in tool_call_indexes:
+                        yield chunk_of(
+                            {
+                                'tool_calls': [
+                                    {
+                                        'index': tool_call_indexes[event['index']],
+                                        'function': {'arguments': delta.get('partial_json', '')},
+                                    }
+                                ]
+                            }
+                        )
+                elif event_type == 'message_delta':
+                    stop_reason = (event.get('delta') or {}).get('stop_reason')
+                    if stop_reason:
+                        finish_reason = ANTHROPIC_STOP_REASON_TO_FINISH_REASON.get(stop_reason, 'stop')
+                    usage = event.get('usage') or {}
+                    completion_tokens = usage.get('output_tokens', completion_tokens)
+                    if 'input_tokens' in usage:
+                        prompt_tokens = _anthropic_prompt_tokens(usage)
+                elif event_type == 'message_stop':
+                    completed = True
+                    yield chunk_of({}, finish_reason)
+                    yield _format_openai_sse(
+                        {
+                            'id': completion_id,
+                            'object': 'chat.completion.chunk',
+                            'created': created,
+                            'model': model,
+                            'choices': [],
+                            'usage': {
+                                'prompt_tokens': prompt_tokens,
+                                'completion_tokens': completion_tokens,
+                                'total_tokens': prompt_tokens + completion_tokens,
+                            },
+                        }
+                    )
+                    yield b'data: [DONE]\n\n'
+                elif event_type == 'error':
+                    completed = True
+                    yield _format_openai_sse({'error': event.get('error') or {'message': 'Anthropic stream failed'}})
+                    yield b'data: [DONE]\n\n'
+
+        if not completed:
+            yield _format_openai_sse({'error': {'message': 'Anthropic stream ended before message_stop'}})
+            yield b'data: [DONE]\n\n'
+    finally:
+        await anthropic_stream.aclose()

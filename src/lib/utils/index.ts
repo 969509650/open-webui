@@ -1483,6 +1483,17 @@ const toTokenCount = (value: unknown) => {
 	return Number.isFinite(parsed) ? Math.trunc(parsed) : 0;
 };
 
+type UsageTokenDetails = { reasoning_tokens?: unknown } | undefined;
+
+// Chat Completions 放在 completion_tokens_details，Responses 放在 output_tokens_details
+const getReasoningTokenCount = (usage: Record<string, unknown>) => {
+	const completionDetails = usage.completion_tokens_details as UsageTokenDetails;
+	const outputDetails = usage.output_tokens_details as UsageTokenDetails;
+	return toTokenCount(completionDetails?.reasoning_tokens ?? outputDetails?.reasoning_tokens);
+};
+
+// 返回“下一轮请求会带上的上下文大小”：提示 token + 回复里的可见部分。
+// 思考 token 计入回复用量，但不会进入下一轮提示，所以要扣掉。
 export const getUsageTokenCount = (usage?: Record<string, unknown> | null) => {
 	if (!usage) {
 		return 0;
@@ -1500,7 +1511,11 @@ export const getUsageTokenCount = (usage?: Record<string, unknown> | null) => {
 		usage.completion_tokens || usage.output_tokens || usage.eval_count || usage.predicted_n || 0
 	);
 
-	return promptTokens + completionTokens;
+	// 工具循环合并后的 reasoning_tokens 是各次调用之和，而 completion_tokens 只取最后一次，
+	// 所以扣减量以本次回复为上限，避免扣成负数
+	const reasoningTokens = Math.min(completionTokens, getReasoningTokenCount(usage));
+
+	return promptTokens + completionTokens - reasoningTokens;
 };
 
 export const formatFileSize = (size) => {

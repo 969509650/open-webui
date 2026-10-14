@@ -1605,6 +1605,20 @@
 										{/if}
 									{/if}
 
+									{#if message.duration !== undefined}
+										<Tooltip
+											className="flex self-center"
+											content={$i18n.t('Response time')}
+											placement="bottom"
+										>
+											<span
+												class="hover-reveal ml-1 shrink-0 whitespace-nowrap text-[0.6875rem] tabular-nums text-gray-400 dark:text-gray-600 select-none"
+											>
+												{message.duration}s
+											</span>
+										</Tooltip>
+									{/if}
+
 									{#if message.timestamp}
 										<Tooltip
 											className="flex self-center"
