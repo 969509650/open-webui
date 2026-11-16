@@ -117,7 +117,7 @@ export const SUPPORTED_FILE_EXTENSIONS = [
 export const DEFAULT_CONTEXT_WINDOW_TOKENS = 272000;
 
 export const DEFAULT_CAPABILITIES = {
-	file_context: true,
+	file_context: undefined as boolean | undefined,
 	vision: true,
 	file_upload: true,
 	web_search: true,
