@@ -3299,6 +3299,8 @@
 	"settings.admin.images.imagesEditGeminiApiKey.label": "API 密钥",
 	"settings.admin.images.imagesEditOpenaiApiBaseUrl.label": "接口地址",
 	"settings.admin.images.imagesEditOpenaiApiKey.label": "API 密钥",
+	"settings.admin.images.imagesEditOpenaiApiParams.description": "在每个图片编辑请求中发送附加 JSON 参数。",
+	"settings.admin.images.imagesEditOpenaiApiParams.label": "额外参数",
 	"settings.admin.images.imagesEditOpenaiApiVersion.label": "API 版本",
 	"settings.admin.images.imagesGeminiApiBaseUrl.description": "覆盖 Gemini 图片生成端点。",
 	"settings.admin.images.imagesGeminiApiBaseUrl.label": "基础地址",

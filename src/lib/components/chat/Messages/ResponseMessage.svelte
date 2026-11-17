@@ -1138,12 +1138,13 @@
 									</button>
 								</Tooltip>
 
+								<!-- 朗读按钮仅隐藏、不移除：Chat.svelte 的“响应自动播放”通过该按钮的 id 触发朗读 -->
 								{#if !readOnly && ($user?.role === 'admin' || ($user?.permissions?.chat?.tts ?? true))}
 									<Tooltip content={$i18n.t('Read Aloud')} placement="bottom">
 										<button
 											aria-label={$i18n.t('Read Aloud')}
 											id="speak-button-{message.id}"
-											class="{isLastMessage || ($settings?.highContrastMode ?? false)
+											class="hidden! {isLastMessage || ($settings?.highContrastMode ?? false)
 												? 'visible'
 												: 'hover-reveal'} inline-flex size-7 shrink-0 items-center justify-center p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-gray-400 hover:text-gray-600 transition"
 											on:click={() => {
@@ -1436,13 +1437,14 @@
 										</Tooltip>
 									{/if}
 
+									<!-- 继续回答仅隐藏：Gemini 等模型不接受以助手消息结尾的请求（预填续写），后端适配前先不对用户开放 -->
 									{#if canBranch && isLastMessage && ($user?.role === 'admin' || ($user?.permissions?.chat?.continue_response ?? true))}
 										<Tooltip content={$i18n.t('Continue Response')} placement="bottom">
 											<button
 												aria-label={$i18n.t('Continue Response')}
 												type="button"
 												id="continue-response-button"
-												class="{isLastMessage || ($settings?.highContrastMode ?? false)
+												class="hidden! {isLastMessage || ($settings?.highContrastMode ?? false)
 													? 'visible'
 													: 'hover-reveal'} inline-flex size-7 shrink-0 items-center justify-center p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-gray-400 hover:text-gray-600 transition"
 												on:click={() => {

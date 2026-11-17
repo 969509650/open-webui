@@ -1545,6 +1545,14 @@ IMAGES_EDIT_OPENAI_API_VERSION = os.getenv('IMAGES_EDIT_OPENAI_API_VERSION', '')
 
 IMAGES_EDIT_OPENAI_API_KEY = os.getenv('IMAGES_EDIT_OPENAI_API_KEY', OPENAI_API_KEY)
 
+images_edit_openai_params = os.getenv('IMAGES_EDIT_OPENAI_PARAMS', '')
+try:
+    images_edit_openai_params = JSONCodec.loads(images_edit_openai_params)
+except JSONCodec.JSONDecodeError:
+    images_edit_openai_params = {}
+
+IMAGES_EDIT_OPENAI_API_PARAMS = images_edit_openai_params
+
 IMAGES_EDIT_GEMINI_API_BASE_URL = os.getenv('IMAGES_EDIT_GEMINI_API_BASE_URL', GEMINI_API_BASE_URL)
 IMAGES_EDIT_GEMINI_API_KEY = os.getenv('IMAGES_EDIT_GEMINI_API_KEY', GEMINI_API_KEY)
 
@@ -3194,6 +3202,7 @@ DEFAULT_CONFIG = {
     'images.edit.openai.api_base_url': IMAGES_EDIT_OPENAI_API_BASE_URL,
     'images.edit.openai.api_version': IMAGES_EDIT_OPENAI_API_VERSION,
     'images.edit.openai.api_key': IMAGES_EDIT_OPENAI_API_KEY,
+    'images.edit.openai.params': IMAGES_EDIT_OPENAI_API_PARAMS,
     'images.edit.gemini.api_base_url': IMAGES_EDIT_GEMINI_API_BASE_URL,
     'images.edit.gemini.api_key': IMAGES_EDIT_GEMINI_API_KEY,
     'images.edit.comfyui.base_url': IMAGES_EDIT_COMFYUI_BASE_URL,

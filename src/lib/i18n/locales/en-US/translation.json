@@ -3309,6 +3309,8 @@
 	"settings.admin.images.imagesEditGeminiApiKey.label": "API Key",
 	"settings.admin.images.imagesEditOpenaiApiBaseUrl.label": "API Base URL",
 	"settings.admin.images.imagesEditOpenaiApiKey.label": "API Key",
+	"settings.admin.images.imagesEditOpenaiApiParams.description": "Send extra JSON parameters with each image edit request.",
+	"settings.admin.images.imagesEditOpenaiApiParams.label": "Additional Parameters",
 	"settings.admin.images.imagesEditOpenaiApiVersion.label": "API Version",
 	"settings.admin.images.imagesGeminiApiBaseUrl.description": "Override the Gemini image generation endpoint.",
 	"settings.admin.images.imagesGeminiApiBaseUrl.label": "Base URL",

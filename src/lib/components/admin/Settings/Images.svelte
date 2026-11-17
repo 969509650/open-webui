@@ -143,6 +143,11 @@
 				typeof config.IMAGES_OPENAI_API_PARAMS === 'string' &&
 				config.IMAGES_OPENAI_API_PARAMS.trim() !== ''
 					? JSON.parse(config.IMAGES_OPENAI_API_PARAMS)
+					: {},
+			IMAGES_EDIT_OPENAI_API_PARAMS:
+				typeof config.IMAGES_EDIT_OPENAI_API_PARAMS === 'string' &&
+				config.IMAGES_EDIT_OPENAI_API_PARAMS.trim() !== ''
+					? JSON.parse(config.IMAGES_EDIT_OPENAI_API_PARAMS)
 					: {}
 		}).catch((error) => {
 			toast.error(`${error}`);
@@ -180,6 +185,16 @@
 			typeof config?.IMAGES_OPENAI_API_PARAMS === 'string' &&
 			config.IMAGES_OPENAI_API_PARAMS.trim() !== '' &&
 			!validateJSON(config.IMAGES_OPENAI_API_PARAMS)
+		) {
+			toast.error($i18n.t('Invalid JSON format for Parameters'));
+			loading = false;
+			return;
+		}
+
+		if (
+			typeof config?.IMAGES_EDIT_OPENAI_API_PARAMS === 'string' &&
+			config.IMAGES_EDIT_OPENAI_API_PARAMS.trim() !== '' &&
+			!validateJSON(config.IMAGES_EDIT_OPENAI_API_PARAMS)
 		) {
 			toast.error($i18n.t('Invalid JSON format for Parameters'));
 			loading = false;
@@ -292,6 +307,11 @@
 				typeof config.IMAGES_OPENAI_API_PARAMS === 'object'
 					? JSON.stringify(config.IMAGES_OPENAI_API_PARAMS ?? {}, null, 2)
 					: config.IMAGES_OPENAI_API_PARAMS;
+
+			config.IMAGES_EDIT_OPENAI_API_PARAMS =
+				typeof config.IMAGES_EDIT_OPENAI_API_PARAMS === 'object'
+					? JSON.stringify(config.IMAGES_EDIT_OPENAI_API_PARAMS ?? {}, null, 2)
+					: config.IMAGES_EDIT_OPENAI_API_PARAMS;
 
 			config.AUTOMATIC1111_PARAMS =
 				typeof config.AUTOMATIC1111_PARAMS === 'object'
@@ -877,6 +897,20 @@
 									class={inputClass}
 									placeholder={$i18n.t('settings.admin.images.imagesEditOpenaiApiVersion.label')}
 									bind:value={config.IMAGES_EDIT_OPENAI_API_VERSION}
+								/>
+							</AdminSettingField>
+
+							<AdminSettingField
+								label={$i18n.t('settings.admin.images.imagesEditOpenaiApiParams.label')}
+								description={$i18n.t('settings.admin.images.imagesEditOpenaiApiParams.description')}
+								forId="images-edit-openai-api-params"
+							>
+								<Textarea
+									id="images-edit-openai-api-params"
+									className={textareaClass}
+									bind:value={config.IMAGES_EDIT_OPENAI_API_PARAMS}
+									placeholder={$i18n.t('Enter additional parameters in JSON format')}
+									minSize={100}
 								/>
 							</AdminSettingField>
 						{:else if config?.IMAGE_EDIT_ENGINE === 'comfyui'}

@@ -93,6 +93,7 @@ IMAGE_CONFIG_KEYS = {
     'IMAGES_EDIT_OPENAI_API_BASE_URL': 'images.edit.openai.api_base_url',
     'IMAGES_EDIT_OPENAI_API_KEY': 'images.edit.openai.api_key',
     'IMAGES_EDIT_OPENAI_API_VERSION': 'images.edit.openai.api_version',
+    'IMAGES_EDIT_OPENAI_API_PARAMS': 'images.edit.openai.params',
     'IMAGES_EDIT_GEMINI_API_BASE_URL': 'images.edit.gemini.api_base_url',
     'IMAGES_EDIT_GEMINI_API_KEY': 'images.edit.gemini.api_key',
     'IMAGES_EDIT_COMFYUI_BASE_URL': 'images.edit.comfyui.base_url',
@@ -276,6 +277,7 @@ class ImagesConfig(BaseModel):
     IMAGES_EDIT_OPENAI_API_BASE_URL: str
     IMAGES_EDIT_OPENAI_API_KEY: str
     IMAGES_EDIT_OPENAI_API_VERSION: str
+    IMAGES_EDIT_OPENAI_API_PARAMS: dict | str | None
     IMAGES_EDIT_GEMINI_API_BASE_URL: str
     IMAGES_EDIT_GEMINI_API_KEY: str
     IMAGES_EDIT_COMFYUI_BASE_URL: str
@@ -1021,6 +1023,7 @@ async def image_edits(
                     )
                     else {'response_format': 'b64_json'}
                 ),
+                **(image_config.IMAGES_EDIT_OPENAI_API_PARAMS or {}),
             }
 
             files = []
@@ -1044,6 +1047,9 @@ async def image_edits(
             for key, value in data.items():
                 if isinstance(value, dict):
                     form.add_field(key, JSONCodec.dumps(value))
+                elif isinstance(value, bool):
+                    # 表单字段只能是字符串；str(False) 得到 "False"，部分网关不识别，统一用小写 true/false
+                    form.add_field(key, str(value).lower())
                 else:
                     form.add_field(key, str(value))
             for param_name, (filename, file_obj, content_type_val) in files:
